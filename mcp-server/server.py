@@ -26,14 +26,14 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from fastmcp import FastMCP  # noqa: E402
+
 from lib.embedder import Embedder  # noqa: E402
 from lib.store import (  # noqa: E402
     DEFAULT_COLLECTION,
     get_client,
     get_collection,
 )
-
-from fastmcp import FastMCP  # noqa: E402
 
 LOG = logging.getLogger("shared-memory-mcp")
 logging.basicConfig(
@@ -121,14 +121,12 @@ def memory_search(
 
     kwargs: dict[str, Any] = {
         "query_embeddings": [emb],
-        "n_results": top_k,
+        # Fetch more than top_k so we can dedupe and filter noise, then trim.
+        "n_results": min(top_k * 3, 100),
         "include": ["documents", "metadatas", "distances"],
     }
     if where:
         kwargs["where"] = where
-
-    # Fetch more than top_k so we can dedupe and filter noise, then trim.
-    kwargs["n_results"] = min(top_k * 3, 100)
     res = col.query(**kwargs)
     docs = (res.get("documents") or [[]])[0]
     metas = (res.get("metadatas") or [[]])[0]
@@ -136,7 +134,7 @@ def memory_search(
 
     seen_hashes: set[str] = set()
     out: list[dict] = []
-    for doc, meta, dist in zip(docs, metas, dists):
+    for doc, meta, dist in zip(docs, metas, dists, strict=False):
         if not doc:
             continue
         # since filter: ISO strings compare lexicographically

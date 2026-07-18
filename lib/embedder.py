@@ -16,8 +16,9 @@ import logging
 import math
 import os
 import time
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, Literal
+from typing import Literal
 
 import requests
 

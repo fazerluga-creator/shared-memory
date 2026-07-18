@@ -1,5 +1,9 @@
 # shared-memory
 
+[![CI](https://github.com/fazerluga-creator/shared-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/fazerluga-creator/shared-memory/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
+
 A portable, self-hosted **semantic memory layer for LLM agents**, exposed over
 the [Model Context Protocol](https://modelcontextprotocol.io) (MCP).
 
@@ -180,6 +184,11 @@ Use a stable, deterministic id scheme so re-runs upsert instead of duplicating.
 - [ ] Optional PII filter at index time.
 - [ ] Session-end hooks to auto-index new content.
 - [ ] More example adapters (chat logs, issue trackers).
+
+## Contributing
+
+Issues and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). New indexer
+adapters (chat logs, issue trackers, docs) are a great place to start.
 
 ## License
 
