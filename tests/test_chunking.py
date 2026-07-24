@@ -81,3 +81,13 @@ def test_discover_walks_recursively(tmp_path):
 
 def test_discover_missing_dir_returns_empty(tmp_path):
     assert idx._discover(tmp_path / "nope", "test") == []
+
+
+def test_existing_ids_for_path_returns_matching_ids():
+    class FakeCollection:
+        def get(self, where=None, include=None):
+            assert where is not None
+            return {"ids": ["a::markdown::note.md::000", "a::markdown::note.md::001"]}
+
+    ids = idx._existing_ids_for_path(FakeCollection(), "a", "note.md")
+    assert ids == ["a::markdown::note.md::000", "a::markdown::note.md::001"]

@@ -37,6 +37,7 @@ from lib.embedder import Embedder  # noqa: E402
 from lib.store import (  # noqa: E402
     DEFAULT_COLLECTION,
     add_chunks,
+    format_timestamp,
     get_client,
     get_collection,
 )
@@ -106,7 +107,7 @@ def _chunks_for(md: MdFile) -> list[tuple[str, dict]]:
         "file": md.path.name,
         "path": str(md.path),
         "mtime": int(mtime),
-        "timestamp": datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat(),
+        "timestamp": format_timestamp(datetime.fromtimestamp(mtime, tz=timezone.utc)),
     }
 
     for heading, body in h2_sections:
@@ -154,6 +155,25 @@ def _existing_mtime_by_path(collection, agent: str) -> dict[str, int]:
     return out
 
 
+def _existing_ids_for_path(collection, agent: str, path: str) -> list[str]:
+    """Return ids already indexed for a markdown file path."""
+    try:
+        got = collection.get(
+            where={
+                "$and": [
+                    {"agent": {"$eq": agent}},
+                    {"source": {"$eq": "markdown"}},
+                    {"path": {"$eq": path}},
+                ]
+            },
+            include=[],
+        )
+    except Exception as exc:
+        logging.debug("id lookup failed for %s: %s", path, exc)
+        return []
+    return list(got.get("ids") or [])
+
+
 def run(
     root: Path,
     agent: str,
@@ -198,6 +218,13 @@ def run(
                 metas.append(meta)
             if not dry_run:
                 add_chunks(collection, embedder, ids, texts, metas, upsert=True)
+                stale_ids = [
+                    cid
+                    for cid in _existing_ids_for_path(collection, agent, str(md.path))
+                    if cid not in ids
+                ]
+                if stale_ids:
+                    collection.delete(ids=stale_ids)
             stats["chunks_added"] += len(chunks)
             stats["files_indexed"] += 1
         except Exception as exc:  # noqa: BLE001

@@ -7,13 +7,20 @@ server = load_module("mcp-server/server.py", "shared_memory_server")
 
 
 def test_normalize_since_passes_iso_through():
-    assert server._normalize_since("2026-07-01T00:00:00+00:00") == "2026-07-01T00:00:00+00:00"
+    out = server._normalize_since("2026-07-01T00:00:00+00:00")
+    assert out.isoformat().startswith("2026-07-01T00:00:00")
 
 
 def test_normalize_since_converts_epoch():
     out = server._normalize_since("1751328000")  # 2025-07-01 UTC
-    assert out.startswith("2025-07-01")
-    assert "T" in out
+    assert out.year == 2025
+    assert out.month == 7
+    assert out.day == 1
+
+
+def test_normalize_since_accepts_z_suffix():
+    out = server._normalize_since("2026-07-01T00:00:00Z")
+    assert out.isoformat().startswith("2026-07-01T00:00:00")
 
 
 def test_build_where_empty():

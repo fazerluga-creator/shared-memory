@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,28 @@ from chromadb.config import Settings
 from .embedder import ENV_PATH, Embedder, _load_env
 
 LOG = logging.getLogger(__name__)
+
+
+def parse_timestamp(value: str) -> datetime:
+    """Parse ISO-8601 or unix-epoch strings into timezone-aware UTC datetimes."""
+    s = str(value).strip()
+    if not s:
+        raise ValueError("empty timestamp")
+    if s.isdigit():
+        return datetime.fromtimestamp(int(s), tz=timezone.utc)
+    if s.endswith("Z"):
+        s = f"{s[:-1]}+00:00"
+    dt = datetime.fromisoformat(s)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def format_timestamp(dt: datetime | None = None) -> str:
+    """Return a canonical UTC ISO timestamp used across the collection."""
+    when = dt or datetime.now(timezone.utc)
+    return when.astimezone(timezone.utc).isoformat()
+
 
 DEFAULT_DATA_DIR = Path(
     os.environ.get("SHARED_MEMORY_DATA_DIR")
@@ -53,10 +76,22 @@ def get_collection(
     except Exception as exc:  # noqa: BLE001
         LOG.warning("cannot initialize embedder for collection metadata: %s", exc)
         metadata = {"hnsw:space": "cosine"}
-    return client.get_or_create_collection(
+    collection = client.get_or_create_collection(
         name=name,
         metadata=metadata,
     )
+    stored_meta = collection.metadata or {}
+    expected_embedder = metadata.get("embedder")
+    stored_embedder = stored_meta.get("embedder")
+    if stored_embedder and expected_embedder and stored_embedder != expected_embedder:
+        LOG.warning(
+            "collection %r embedder mismatch: stored=%s current=%s; "
+            "re-index or use a new collection to avoid degraded search",
+            name,
+            stored_embedder,
+            expected_embedder,
+        )
+    return collection
 
 
 def existing_session_ids(collection, agent: str | None = None) -> set[str]:
@@ -67,7 +102,7 @@ def existing_session_ids(collection, agent: str | None = None) -> set[str]:
     """
     where: dict[str, Any] | None = None
     if agent:
-        where = {"agent": agent}
+        where = {"agent": {"$eq": agent}}
     try:
         got = collection.get(where=where, include=["metadatas"])
     except Exception as exc:  # chroma can throw if collection empty on some versions
