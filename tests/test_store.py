@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 from conftest import ROOT  # noqa: F401
 
-from lib.store import add_chunks, existing_session_ids
+from lib.store import add_chunks, existing_session_ids, format_timestamp, parse_timestamp
 
 
 class FakeEmbedder:
@@ -70,3 +70,19 @@ def test_existing_session_ids_survives_get_failure():
             raise RuntimeError("empty collection")
 
     assert existing_session_ids(Broken()) == set()
+
+
+def test_parse_timestamp_accepts_z_and_offset_equally():
+    z = parse_timestamp("2026-07-01T00:00:00Z")
+    plus = parse_timestamp("2026-07-01T00:00:00+00:00")
+    assert z == plus
+
+
+def test_parse_timestamp_accepts_epoch():
+    assert parse_timestamp("1751328000").year == 2025
+
+
+def test_format_timestamp_is_utc_iso():
+    out = format_timestamp(parse_timestamp("2026-07-01T00:00:00Z"))
+    assert out.startswith("2026-07-01T00:00:00")
+    assert "+00:00" in out

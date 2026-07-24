@@ -18,7 +18,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import sys
-import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -31,8 +31,10 @@ from fastmcp import FastMCP  # noqa: E402
 from lib.embedder import Embedder  # noqa: E402
 from lib.store import (  # noqa: E402
     DEFAULT_COLLECTION,
+    format_timestamp,
     get_client,
     get_collection,
+    parse_timestamp,
 )
 
 LOG = logging.getLogger("shared-memory-mcp")
@@ -63,15 +65,9 @@ def _get_col():
     return _collection
 
 
-def _normalize_since(since: str) -> str:
-    """Normalize `since` to the ISO format used for timestamps in the collection.
-
-    Accepts an ISO string or a unix-epoch string (digits only).
-    """
-    s = since.strip()
-    if s.isdigit():
-        return datetime.fromtimestamp(int(s), tz=timezone.utc).isoformat()
-    return s
+def _normalize_since(since: str) -> datetime:
+    """Normalize `since` to UTC for comparisons against collection timestamps."""
+    return parse_timestamp(since)
 
 
 def _build_where(
@@ -117,7 +113,7 @@ def memory_search(
     col = _get_col()
     emb = _get_embedder().embed_one(query)
     where = _build_where(agent_filter, source_filter)
-    since_iso = _normalize_since(since) if since else None
+    since_dt = _normalize_since(since) if since else None
 
     kwargs: dict[str, Any] = {
         "query_embeddings": [emb],
@@ -137,9 +133,17 @@ def memory_search(
     for doc, meta, dist in zip(docs, metas, dists, strict=False):
         if not doc:
             continue
-        # since filter: ISO strings compare lexicographically
-        if since_iso and ((meta or {}).get("timestamp") or "") < since_iso:
-            continue
+        # since filter: compare parsed UTC datetimes (ISO string formats differ).
+        if since_dt:
+            raw_ts = (meta or {}).get("timestamp")
+            if not raw_ts:
+                continue
+            try:
+                if parse_timestamp(str(raw_ts)) < since_dt:
+                    continue
+            except ValueError:
+                LOG.debug("skipping chunk with invalid timestamp: %r", raw_ts)
+                continue
         # Skip known LLM-error noise
         stripped = doc.strip()
         if len(stripped) < 300 and (
@@ -168,16 +172,21 @@ def memory_add(text: str, metadata: dict | None = None) -> str:
     meta.setdefault("source", "memory_add")
     # ISO UTC is the single timestamp format used across the collection
     # (not unix-epoch!).
-    meta.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+    meta.setdefault("timestamp", format_timestamp())
     if str(meta["timestamp"]).isdigit():
-        meta["timestamp"] = datetime.fromtimestamp(
-            int(meta["timestamp"]), tz=timezone.utc
-        ).isoformat()
+        meta["timestamp"] = format_timestamp(
+            datetime.fromtimestamp(int(meta["timestamp"]), tz=timezone.utc)
+        )
+    elif meta.get("timestamp"):
+        try:
+            meta["timestamp"] = format_timestamp(parse_timestamp(str(meta["timestamp"])))
+        except ValueError:
+            meta["timestamp"] = format_timestamp()
 
     col = _get_col()
     emb = _get_embedder().embed_document_one(text)
     digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
-    cid = f"{meta['agent']}::manual::{int(time.time())}::{digest}"
+    cid = f"{meta['agent']}::manual::{uuid.uuid4().hex[:12]}::{digest}"
     col.add(
         ids=[cid],
         embeddings=[emb],
