@@ -6,6 +6,12 @@ __pycache__/
 *.pyc
 *.log
 *.bak*
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+_pytest.txt
+_ruff.txt
+_status.txt
 
 # local, secret config — never commit
 embedding.env

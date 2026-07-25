@@ -7,10 +7,11 @@ Chroma collection so they become searchable via the MCP ``memory_search`` tool.
 
 Chunking:
   - Split by H2 headings (``##``). If a file has no H2s, split by paragraphs.
-  - Hard cap per chunk: 8000 chars (soft split).
+  - Soft-cap per chunk: 8000 chars, preferring word/newline boundaries.
 
 Idempotency:
-  - ID = ``{agent}::markdown::{path}::{chunk_idx}``
+  - ID = ``{agent}::markdown::{posix_path}::{chunk_idx}``
+  - Paths are stored as POSIX (forward slashes) for cross-OS stability.
   - The file mtime is stored in metadata. With ``--incremental`` files whose
     mtime is unchanged are skipped.
 
@@ -92,11 +93,42 @@ def _split_paragraphs(text: str) -> list[str]:
     return paras or [text]
 
 
+def _soft_split(text: str, max_chars: int = MAX_CHUNK_CHARS) -> list[str]:
+    """Split text into pieces of at most ``max_chars``, preferring word breaks."""
+    if len(text) <= max_chars:
+        return [text] if text else []
+    pieces: list[str] = []
+    start = 0
+    n = len(text)
+    while start < n:
+        end = min(start + max_chars, n)
+        if end < n:
+            window = text[start:end]
+            # Prefer the last whitespace/newline in the window.
+            cut = max(window.rfind("\n"), window.rfind(" "), window.rfind("\t"))
+            if cut > max_chars // 4:
+                end = start + cut + 1
+        piece = text[start:end].strip()
+        if piece:
+            pieces.append(piece)
+        if end <= start:
+            # Safety: always advance to avoid infinite loops on pathological input.
+            end = start + max_chars
+        start = end
+    return pieces or ([text[:max_chars]] if text else [])
+
+
+def _path_key(path: Path) -> str:
+    """Stable POSIX path string for ids and metadata across OSes."""
+    return path.as_posix()
+
+
 def _chunks_for(md: MdFile) -> list[tuple[str, dict]]:
     """Produce list of (chunk_text, metadata) for a single markdown file."""
     text = md.path.read_text(encoding="utf-8", errors="replace")
     mtime = md.path.stat().st_mtime
     h2_sections = _split_by_h2(text)
+    path_key = _path_key(md.path)
 
     out: list[tuple[str, dict]] = []
     chunk_idx = 0
@@ -105,13 +137,13 @@ def _chunks_for(md: MdFile) -> list[tuple[str, dict]]:
         "agent": md.agent,
         "source": "markdown",
         "file": md.path.name,
-        "path": str(md.path),
+        "path": path_key,
         "mtime": int(mtime),
         "timestamp": format_timestamp(datetime.fromtimestamp(mtime, tz=timezone.utc)),
     }
 
     for heading, body in h2_sections:
-        # If section is small, emit as-is. If big, split by paragraphs.
+        # If section is small, emit as-is. If big, split by paragraphs then soft-cap.
         if len(body) <= MAX_CHUNK_CHARS:
             chunk_text = f"# {md.path.name} :: {heading}\n\n{body}"
             meta = {**base_meta, "heading": heading, "chunk_index": chunk_idx}
@@ -119,8 +151,7 @@ def _chunks_for(md: MdFile) -> list[tuple[str, dict]]:
             chunk_idx += 1
         else:
             for para in _split_paragraphs(body):
-                for i in range(0, len(para), MAX_CHUNK_CHARS):
-                    piece = para[i : i + MAX_CHUNK_CHARS]
+                for piece in _soft_split(para, MAX_CHUNK_CHARS):
                     chunk_text = f"# {md.path.name} :: {heading}\n\n{piece}"
                     meta = {**base_meta, "heading": heading, "chunk_index": chunk_idx}
                     out.append((chunk_text, meta))
@@ -205,7 +236,9 @@ def run(
     for md in files:
         try:
             cur_mtime = int(md.path.stat().st_mtime)
-            if incremental and existing.get(str(md.path), -1) >= cur_mtime:
+            path_key = _path_key(md.path)
+            seen_mtime = max(existing.get(path_key, -1), existing.get(str(md.path), -1))
+            if incremental and seen_mtime >= cur_mtime:
                 stats["files_skipped_unchanged"] += 1
                 continue
             chunks = _chunks_for(md)
@@ -213,16 +246,16 @@ def run(
                 continue
             ids, texts, metas = [], [], []
             for idx, (txt, meta) in enumerate(chunks):
-                ids.append(f"{md.agent}::markdown::{md.path}::{idx:03d}")
+                ids.append(f"{md.agent}::markdown::{path_key}::{idx:03d}")
                 texts.append(txt)
                 metas.append(meta)
             if not dry_run:
                 add_chunks(collection, embedder, ids, texts, metas, upsert=True)
-                stale_ids = [
-                    cid
-                    for cid in _existing_ids_for_path(collection, agent, str(md.path))
-                    if cid not in ids
-                ]
+                stale_ids: list[str] = []
+                for p in {path_key, str(md.path)}:
+                    for cid in _existing_ids_for_path(collection, agent, p):
+                        if cid not in ids and cid not in stale_ids:
+                            stale_ids.append(cid)
                 if stale_ids:
                     collection.delete(ids=stale_ids)
             stats["chunks_added"] += len(chunks)

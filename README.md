@@ -67,7 +67,8 @@ Requires Python 3.10+.
 git clone https://github.com/fazerluga-creator/shared-memory.git
 cd shared-memory
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e .
+# or: pip install -r requirements.txt
 ```
 
 Optionally copy the config and tweak it (defaults are fine to start):
@@ -172,11 +173,13 @@ Use a stable, deterministic id scheme so re-runs upsert instead of duplicating.
   explicitly on `add`/`query`, so the store stays decoupled from embedder
   availability.
 - **Chunking (markdown):** split by `##` headings; fall back to paragraphs;
-  soft-cap 8000 chars.
-- **Timestamps** are ISO-UTC strings throughout (ISO sorts lexicographically,
-  which is what the `since` filter relies on).
+  soft-cap 8000 chars at word/newline boundaries. Paths in ids/metadata use
+  POSIX form for cross-OS stability.
+- **Timestamps** are ISO-UTC strings throughout; `since` filtering parses them
+  as datetimes (so `Z` and `+00:00` are equivalent).
 - **Search-time hygiene:** results are de-duplicated by content hash and short
-  known-error strings are dropped.
+  known-error strings are dropped. Scores are clamped to `[0, 1]`.
+- **Stats:** `memory_stats` pages through metadatas to bound peak memory.
 
 ## Roadmap
 

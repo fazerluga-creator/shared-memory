@@ -4,7 +4,13 @@ from __future__ import annotations
 import pytest
 from conftest import ROOT  # noqa: F401  (ensures repo root on sys.path)
 
-from lib.embedder import Embedder, EmbeddingConfigError, _l2_normalize, _load_env
+from lib.embedder import (
+    Embedder,
+    EmbeddingConfigError,
+    _l2_normalize,
+    _load_env,
+    _providers_for_device,
+)
 
 
 def test_load_env_missing_file_returns_empty(tmp_path):
@@ -33,6 +39,19 @@ def test_l2_normalize():
 
 def test_l2_normalize_zero_vector_unchanged():
     assert _l2_normalize([0.0, 0.0]) == [0.0, 0.0]
+
+
+def test_providers_for_device():
+    assert _providers_for_device("cpu") == ["CPUExecutionProvider"]
+    assert _providers_for_device("cuda") == [
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+    assert _providers_for_device("gpu") == [
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+    assert _providers_for_device("weird") is None
 
 
 def test_unsupported_provider_raises(tmp_path):

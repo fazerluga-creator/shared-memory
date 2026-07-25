@@ -97,8 +97,8 @@ def get_collection(
 def existing_session_ids(collection, agent: str | None = None) -> set[str]:
     """Return set of session_id values already present in the collection.
 
-    Uses collection.get() with a where filter. For large collections this is
-    still cheap because we only fetch metadatas, not documents or embeddings.
+    Intended for session/chat-log indexers that skip already-ingested sessions.
+    Uses collection.get() with a where filter and only fetches metadatas.
     """
     where: dict[str, Any] | None = None
     if agent:
