@@ -75,8 +75,8 @@ def _build_where(
     source_filter: str | None,
 ) -> dict[str, Any] | None:
     # NOTE: `since` is not applied here. Chroma's $gte works on numbers only,
-    # while the timestamp stored in the collection is an ISO string, so `since`
-    # is filtered afterwards in memory_search (ISO sorts lexicographically).
+    # while timestamps are ISO strings, so `since` is filtered afterwards in
+    # memory_search via parsed UTC datetimes.
     clauses: list[dict[str, Any]] = []
     if agent_filter:
         clauses.append({"agent": {"$eq": agent_filter}})
@@ -87,6 +87,19 @@ def _build_where(
     if len(clauses) == 1:
         return clauses[0]
     return {"$and": clauses}
+
+
+def _distance_to_score(dist: float | None) -> float:
+    """Map cosine distance to a non-negative relevance score."""
+    if dist is None:
+        return 0.0
+    return max(0.0, 1.0 - float(dist))
+
+
+def _fetch_n_for_search(top_k: int, *, since: bool) -> int:
+    # Over-fetch so post-filters (since / dedupe / noise) can still fill top_k.
+    multiplier = 10 if since else 3
+    return min(max(top_k * multiplier, top_k), 200)
 
 
 @mcp.tool()
@@ -108,6 +121,7 @@ def memory_search(
 
     Returns:
         [{text, metadata, score}, ...] sorted by relevance desc.
+        Scores are clamped to ``[0, 1]`` (``1 - cosine_distance``).
     """
     top_k = max(1, min(50, int(top_k)))
     col = _get_col()
@@ -117,8 +131,7 @@ def memory_search(
 
     kwargs: dict[str, Any] = {
         "query_embeddings": [emb],
-        # Fetch more than top_k so we can dedupe and filter noise, then trim.
-        "n_results": min(top_k * 3, 100),
+        "n_results": _fetch_n_for_search(top_k, since=since_dt is not None),
         "include": ["documents", "metadatas", "distances"],
     }
     if where:
@@ -155,7 +168,7 @@ def memory_search(
         if h in seen_hashes:
             continue
         seen_hashes.add(h)
-        score = 1.0 - float(dist) if dist is not None else 0.0
+        score = _distance_to_score(dist)
         out.append({"text": doc, "metadata": meta or {}, "score": round(score, 4)})
         if len(out) >= top_k:
             break
@@ -196,6 +209,9 @@ def memory_add(text: str, metadata: dict | None = None) -> str:
     return cid
 
 
+_STATS_PAGE = 500
+
+
 @mcp.tool()
 def memory_stats() -> dict:
     """Return collection statistics: total count, breakdown by agent/source."""
@@ -204,18 +220,30 @@ def memory_stats() -> dict:
     if total == 0:
         return {"total": 0, "by_agent": {}, "by_source": {}, "collection": col.name}
 
-    # Fetch all metadatas (only metadata, not docs/embeddings — cheap).
-    got = col.get(include=["metadatas"])
-    metas = got.get("metadatas") or []
+    # Page through metadatas to keep peak memory bounded on large collections.
     by_agent: dict[str, int] = {}
     by_source: dict[str, int] = {}
-    for m in metas:
-        if not m:
-            continue
-        a = m.get("agent", "?")
-        s = m.get("source", "?")
-        by_agent[a] = by_agent.get(a, 0) + 1
-        by_source[s] = by_source.get(s, 0) + 1
+    offset = 0
+    while offset < total:
+        try:
+            got = col.get(include=["metadatas"], limit=_STATS_PAGE, offset=offset)
+        except TypeError:
+            # Older Chroma without limit/offset — fall back to a single fetch.
+            got = col.get(include=["metadatas"])
+            offset = total  # exit after this page
+        metas = got.get("metadatas") or []
+        if not metas:
+            break
+        for m in metas:
+            if not m:
+                continue
+            a = m.get("agent", "?")
+            s = m.get("source", "?")
+            by_agent[a] = by_agent.get(a, 0) + 1
+            by_source[s] = by_source.get(s, 0) + 1
+        offset += len(metas)
+        if len(metas) < _STATS_PAGE:
+            break
     return {
         "total": total,
         "by_agent": by_agent,

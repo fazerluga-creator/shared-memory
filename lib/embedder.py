@@ -86,6 +86,17 @@ def _l2_normalize(vec: list[float]) -> list[float]:
     return [float(x) / norm for x in vec]
 
 
+def _providers_for_device(device: str) -> list[str] | None:
+    """Map EMBEDDING_DEVICE to ONNX Runtime execution providers for fastembed."""
+    d = (device or "cpu").strip().lower()
+    if d in ("cpu", ""):
+        return ["CPUExecutionProvider"]
+    if d in ("cuda", "gpu"):
+        return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    # Unknown device string — let fastembed use its defaults.
+    return None
+
+
 class Embedder:
     """Embedding wrapper used by indexers and the MCP server.
 
@@ -175,11 +186,18 @@ class Embedder:
         # constructor tolerant across minor API differences.
         if self.threads:
             kwargs["threads"] = self.threads
+        providers = _providers_for_device(self.device)
+        if providers:
+            kwargs["providers"] = providers
         try:
             self._local_model = TextEmbedding(**kwargs)
         except TypeError:
-            kwargs.pop("threads", None)
-            self._local_model = TextEmbedding(**kwargs)
+            kwargs.pop("providers", None)
+            try:
+                self._local_model = TextEmbedding(**kwargs)
+            except TypeError:
+                kwargs.pop("threads", None)
+                self._local_model = TextEmbedding(**kwargs)
 
     def _init_openai_compatible(
         self,

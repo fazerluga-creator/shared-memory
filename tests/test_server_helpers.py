@@ -40,3 +40,16 @@ def test_build_where_combines_with_and():
             {"source": {"$eq": "markdown"}},
         ]
     }
+
+
+def test_distance_to_score_clamps_negative():
+    assert server._distance_to_score(0.0) == 1.0
+    assert server._distance_to_score(0.25) == 0.75
+    assert server._distance_to_score(1.5) == 0.0
+    assert server._distance_to_score(None) == 0.0
+
+
+def test_fetch_n_larger_when_since_set():
+    assert server._fetch_n_for_search(5, since=False) == 15
+    assert server._fetch_n_for_search(5, since=True) == 50
+    assert server._fetch_n_for_search(50, since=True) == 200

@@ -1,3 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shared-memory"
+version = "0.1.0"
+description = "Portable semantic memory layer for LLM agents over MCP"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "chromadb>=0.5",
+    "fastembed>=0.4",
+    "fastmcp>=2.0",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[tool.setuptools.packages.find]
+include = ["lib*"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"

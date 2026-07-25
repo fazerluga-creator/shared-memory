@@ -91,3 +91,23 @@ def test_existing_ids_for_path_returns_matching_ids():
 
     ids = idx._existing_ids_for_path(FakeCollection(), "a", "note.md")
     assert ids == ["a::markdown::note.md::000", "a::markdown::note.md::001"]
+
+
+def test_soft_split_prefers_word_boundaries():
+    # Build text longer than the soft cap with a clear mid-word risk if sliced blindly.
+    words = ["alpha", "beta", "gamma", "delta"] * 600  # plenty > 8000 chars
+    text = " ".join(words)
+    pieces = idx._soft_split(text, max_chars=200)
+    assert len(pieces) >= 2
+    for piece in pieces:
+        assert len(piece) <= 200
+        assert not piece.endswith("alph")  # would indicate mid-word cut of "alpha"
+
+
+def test_chunks_for_uses_posix_path(tmp_path):
+    p = tmp_path / "note.md"
+    p.write_text("## One\nbody", encoding="utf-8")
+    md = idx.MdFile(path=p, agent="test")
+    chunks = idx._chunks_for(md)
+    assert chunks[0][1]["path"] == p.as_posix()
+    assert "\\" not in chunks[0][1]["path"]

@@ -9,8 +9,8 @@ fixes to new indexer adapters.
 git clone https://github.com/fazerluga-creator/shared-memory.git
 cd shared-memory
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-pip install pytest ruff
+pip install -e ".[dev]"
+# or: pip install -r requirements.txt && pip install pytest ruff
 ```
 
 ## Running checks
