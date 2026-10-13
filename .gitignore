@@ -1,6 +1,11 @@
 .venv/
 venv/
 chroma_data/
+# the memory itself (SQLite backend) — personal data, never commit
+memory.sqlite
+memory.sqlite-wal
+memory.sqlite-shm
+*.sqlite
 logs/
 __pycache__/
 *.pyc

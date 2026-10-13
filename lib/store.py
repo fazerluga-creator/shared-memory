@@ -1,4 +1,17 @@
-"""ChromaDB persistent-client helper shared by indexers and the MCP server."""
+"""Storage entry point shared by indexers and the MCP server.
+
+Two backends behind one Chroma-style collection API:
+
+* ``sqlite`` (default since 0.2.0) - one SQLite file with chunks, an FTS5 index
+  and vectors; hybrid ranking, see ``lib/store_sqlite.py``. No extra service.
+* ``chroma`` - the original persistent ChromaDB directory. Needs the optional
+  ``chromadb`` dependency (``pip install "shared-memory[chroma]"``).
+
+Choose with ``SHARED_MEMORY_BACKEND`` (environment or ``embedding.env``). When it
+is unset and an existing ``chroma_data`` directory is found without a SQLite
+file next to it, the chroma backend is kept so an upgrade never hides existing
+memories; migrate with ``examples/migrate_chroma_to_sqlite.py``.
+"""
 from __future__ import annotations
 
 import logging
@@ -6,9 +19,6 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
-import chromadb
-from chromadb.config import Settings
 
 from .embedder import ENV_PATH, Embedder, _load_env
 
@@ -36,17 +46,47 @@ def format_timestamp(dt: datetime | None = None) -> str:
     return when.astimezone(timezone.utc).isoformat()
 
 
-DEFAULT_DATA_DIR = Path(
-    os.environ.get("SHARED_MEMORY_DATA_DIR")
-    or (Path(__file__).resolve().parent.parent / "chroma_data")
-)
-DEFAULT_COLLECTION = os.environ.get(
-    "EMBEDDING_COLLECTION",
-    _load_env(ENV_PATH).get("EMBEDDING_COLLECTION", "shared_memory"),
-)
+_ENV = _load_env(ENV_PATH)
+_ROOT = Path(__file__).resolve().parent.parent
 
 
-def get_client(data_dir: Path | str = DEFAULT_DATA_DIR) -> chromadb.api.ClientAPI:
+def _setting(key: str, default: str) -> str:
+    return os.environ.get(key) or _ENV.get(key) or default
+
+
+DEFAULT_DATA_DIR = Path(_setting("SHARED_MEMORY_DATA_DIR", str(_ROOT / "chroma_data")))
+DEFAULT_SQLITE_PATH = Path(_setting("SHARED_MEMORY_DB", str(_ROOT / "memory.sqlite")))
+DEFAULT_COLLECTION = _setting("EMBEDDING_COLLECTION", "shared_memory")
+
+
+def _detect_backend() -> str:
+    explicit = _setting("SHARED_MEMORY_BACKEND", "")
+    if explicit:
+        if explicit not in ("sqlite", "chroma"):
+            raise ValueError(f"SHARED_MEMORY_BACKEND must be sqlite or chroma, got {explicit!r}")
+        return explicit
+    legacy = DEFAULT_DATA_DIR / "chroma.sqlite3"
+    if legacy.exists() and not DEFAULT_SQLITE_PATH.exists():
+        LOG.warning(
+            "found existing Chroma data in %s and no %s: staying on the chroma backend. "
+            "Set SHARED_MEMORY_BACKEND=chroma to silence this, or migrate with "
+            "examples/migrate_chroma_to_sqlite.py",
+            DEFAULT_DATA_DIR, DEFAULT_SQLITE_PATH)
+        return "chroma"
+    return "sqlite"
+
+
+BACKEND = _detect_backend()
+_sqlite_collections: dict[str, Any] = {}
+
+
+def get_client(data_dir: Path | str = DEFAULT_DATA_DIR):
+    """Chroma client, or ``None`` on the sqlite backend (``get_collection`` handles both)."""
+    if BACKEND == "sqlite":
+        return None
+    import chromadb
+    from chromadb.config import Settings
+
     path = Path(data_dir)
     path.mkdir(parents=True, exist_ok=True)
     return chromadb.PersistentClient(
@@ -55,16 +95,26 @@ def get_client(data_dir: Path | str = DEFAULT_DATA_DIR) -> chromadb.api.ClientAP
     )
 
 
-def get_collection(
-    client: chromadb.api.ClientAPI | None = None,
-    name: str = DEFAULT_COLLECTION,
-):
+def get_collection(client=None, name: str = DEFAULT_COLLECTION):
     """Return the collection. Embeddings are computed by us (not by Chroma).
 
     We pass embeddings explicitly on add() and query_embeddings on query(),
     so the collection itself does NOT need an embedding_function. That keeps
     the store decoupled from the embedder's availability.
+
+    On the sqlite backend all collection names share one file; the name is kept
+    for display only. Vectors are tagged with the embedding model, and search
+    ignores vectors of another model, so switching models means re-indexing.
     """
+    if BACKEND == "sqlite":
+        if name not in _sqlite_collections:
+            from .embedder import resolve_model
+            from .store_sqlite import SqliteCollection, Store
+
+            # same env file the Embedder reads, so vector tags and embeddings agree
+            model = "/".join(resolve_model(_ENV))  # e.g. "voyage/voyage-4"
+            _sqlite_collections[name] = SqliteCollection(Store(DEFAULT_SQLITE_PATH, model), name)
+        return _sqlite_collections[name]
     client = client or get_client()
     try:
         emb = Embedder()
