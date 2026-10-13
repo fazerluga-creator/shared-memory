@@ -1,7 +1,9 @@
 """Provider-aware embedding wrapper for shared-memory.
 
 Default provider is local fastembed, so no external API calls are made and the
-stack works out of the box. Configuration is read from an env file resolved in
+stack works out of the box (the first run downloads the model, a few hundred MB).
+Optional providers send text to a remote API: ``openai_compatible`` (any
+``/v1/embeddings`` endpoint) and ``voyage`` (Voyage AI, query/document-aware). Configuration is read from an env file resolved in
 this order:
 
   1. ``$SHARED_MEMORY_ENV``
@@ -38,7 +40,27 @@ DEFAULT_TIMEOUT = 60
 DEFAULT_RETRIES = 5
 DEFAULT_BACKOFF = 2.0
 
-Provider = Literal["local", "openai_compatible"]
+Provider = Literal["local", "openai_compatible", "voyage"]
+PROVIDERS = ("local", "openai_compatible", "voyage")
+
+DEFAULT_LOCAL_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+VOYAGE_URL = "https://api.voyageai.com/v1"
+VOYAGE_DEFAULT_MODEL = "voyage-4"
+VOYAGE_DIMS = {"voyage-4": 1024, "voyage-4-lite": 1024, "voyage-4-large": 1024}
+VOYAGE_BATCH = 128            # API limit is 1000 inputs per request; stay well below
+VOYAGE_BATCH_TOKENS = 100_000  # rough estimate at ~3 chars per token, under the API limit
+
+
+def resolve_model(env: dict[str, str] | None = None, provider: str | None = None) -> tuple[str, str]:
+    """Return ``(provider, model)`` exactly as ``Embedder`` would pick them.
+
+    The SQLite store tags every vector with this model name and ignores vectors
+    of other models, so both sides must agree without loading the model.
+    """
+    env = _load_env(ENV_PATH) if env is None else env
+    prov = (provider or env.get("EMBEDDING_PROVIDER", "local")).strip().lower()
+    default = VOYAGE_DEFAULT_MODEL if prov == "voyage" else DEFAULT_LOCAL_MODEL
+    return prov, env.get("EMBEDDING_MODEL") or default
 
 # Models that fastembed does not ship in its default registry and must be
 # registered at runtime via add_custom_model(). e5 needs MEAN pooling +
@@ -103,6 +125,8 @@ class Embedder:
     Providers:
       - local: fastembed TextEmbedding, default, no network calls after model download.
       - openai_compatible: optional /v1/embeddings fallback, disabled by default.
+      - voyage: Voyage AI embeddings (EMBEDDING_API_KEY or VOYAGE_API_KEY); sends
+        input_type=query/document, which measurably helps retrieval.
 
     ``embed()`` is document-mode for indexing. ``embed_query()`` / ``embed_one()`` are
     query-mode for searches. Task prefixes are controlled by embedding.env.
@@ -122,12 +146,16 @@ class Embedder:
         api_key: str | None = None,
     ):
         env = _load_env(env_path)
-        self.provider: Provider = (provider or env.get("EMBEDDING_PROVIDER", "local")).strip().lower()  # type: ignore[assignment]
-        if self.provider not in ("local", "openai_compatible"):
+        prov, default_model = resolve_model(env, provider)
+        self.provider: Provider = prov  # type: ignore[assignment]
+        if self.provider not in PROVIDERS:
             raise EmbeddingConfigError(f"unsupported EMBEDDING_PROVIDER={self.provider!r}")
 
-        self.model = model or env.get("EMBEDDING_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
-        self.dim = int(env.get("EMBEDDING_DIM", "384"))
+        self.model = model or default_model
+        if self.provider == "voyage":
+            self.dim = int(env.get("EMBEDDING_DIM") or VOYAGE_DIMS.get(self.model, 1024))
+        else:
+            self.dim = int(env.get("EMBEDDING_DIM", "384"))
         self.batch_size = int(batch_size or env.get("EMBEDDING_BATCH_SIZE", DEFAULT_BATCH))
         self.timeout = timeout
         self.retries = retries
@@ -153,6 +181,11 @@ class Embedder:
 
         if self.provider == "local":
             self._init_local()
+        elif self.provider == "voyage":
+            key = api_key or env.get("EMBEDDING_API_KEY") or os.environ.get("VOYAGE_API_KEY")
+            self._init_openai_compatible(env, base_url=base_url or VOYAGE_URL, api_key=key)
+            if not batch_size:
+                self.batch_size = VOYAGE_BATCH
         else:
             self._init_openai_compatible(env, base_url=base_url, api_key=api_key)
 
@@ -290,10 +323,34 @@ class Embedder:
                 out.append(self._finalize_vector(vec))
         return out
 
+    def _embed_voyage(self, texts: list[str], input_type: str) -> list[list[float]]:
+        """Batch by count and by estimated tokens; long inputs are truncated by the API."""
+        out: list[list[float]] = []
+        i = 0
+        while i < len(texts):
+            batch: list[str] = []
+            est = 0
+            while i < len(texts) and len(batch) < self.batch_size:
+                cost = len(texts[i]) // 3 + 1
+                if batch and est + cost > VOYAGE_BATCH_TOKENS:
+                    break
+                batch.append(texts[i])
+                est += cost
+                i += 1
+            resp = self._post({"model": self.model, "input": batch,
+                               "input_type": input_type, "truncation": True})
+            data = sorted(resp.get("data") or [], key=lambda d: d.get("index", 0))
+            if len(data) != len(batch):
+                raise RuntimeError(f"embedding count mismatch: sent {len(batch)}, got {len(data)}")
+            out.extend(self._finalize_vector(d["embedding"]) for d in data)
+        return out
+
     def embed_documents(self, texts: Iterable[str]) -> list[list[float]]:
         prepared = self._prepare_texts(texts, mode="document")
         if not prepared:
             return []
+        if self.provider == "voyage":
+            return self._embed_voyage(prepared, "document")
         if self.provider == "local":
             return self._embed_local(prepared)
         return self._embed_openai_compatible(prepared)
@@ -302,6 +359,8 @@ class Embedder:
         prepared = self._prepare_texts(texts, mode="query")
         if not prepared:
             return []
+        if self.provider == "voyage":
+            return self._embed_voyage(prepared, "query")
         if self.provider == "local":
             return self._embed_local(prepared)
         return self._embed_openai_compatible(prepared)
