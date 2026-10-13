@@ -3,15 +3,24 @@
 
 Tools:
   - memory_search(query, top_k=5, agent_filter=None, source_filter=None, since=None)
-      Returns list of {text, metadata, score}.
+      Returns list of {id, text, metadata, score}.
   - memory_add(text, metadata)
       Returns id of the added chunk.
+  - memory_update(id, text=None, metadata=None, replace_metadata=False)
+      Edits a chunk in place; the id is kept.
+  - memory_forget(ids=None, agent_filter=None, source_filter=None, dry_run=True, expect_count=None)
+      Deletes chunks; dry run by default.
   - memory_stats()
-      Returns {total, by_agent, by_source, collection}.
+      Returns {total, by_agent, by_source, collection, backend}.
 
-Storage is a persistent ChromaDB directory (see lib/store.py, configurable via
-$SHARED_MEMORY_DATA_DIR). Embeddings are provider-aware; the default is a local
-fastembed model configured by embedding.env (see embedding.env.example).
+Storage is a single SQLite file by default (lib/store_sqlite.py) or a ChromaDB
+directory (SHARED_MEMORY_BACKEND=chroma); see lib/store.py. Embeddings are
+provider-aware; the default is a local fastembed model configured by
+embedding.env (see embedding.env.example).
+
+SECURITY: the server has no authentication. Anyone who can reach it can read,
+change and delete every memory. Bind it to 127.0.0.1 (FastMCP's default) and
+never expose it to a network you do not fully control.
 """
 from __future__ import annotations
 
@@ -30,6 +39,7 @@ from fastmcp import FastMCP  # noqa: E402
 
 from lib.embedder import Embedder  # noqa: E402
 from lib.store import (  # noqa: E402
+    BACKEND,
     DEFAULT_COLLECTION,
     format_timestamp,
     get_client,
@@ -74,9 +84,9 @@ def _build_where(
     agent_filter: str | None,
     source_filter: str | None,
 ) -> dict[str, Any] | None:
-    # NOTE: `since` is not applied here. Chroma's $gte works on numbers only,
-    # while timestamps are ISO strings, so `since` is filtered afterwards in
-    # memory_search via parsed UTC datetimes.
+    # NOTE: `since` is not part of this filter. Chroma's $gte works on numbers
+    # only while timestamps are ISO strings, so on the chroma backend `since` is
+    # filtered afterwards; the sqlite backend applies it in SQL before ranking.
     clauses: list[dict[str, Any]] = []
     if agent_filter:
         clauses.append({"agent": {"$eq": agent_filter}})
@@ -120,8 +130,8 @@ def memory_search(
         since: ISO timestamp lower bound on metadata.timestamp
 
     Returns:
-        [{text, metadata, score}, ...] sorted by relevance desc.
-        Scores are clamped to ``[0, 1]`` (``1 - cosine_distance``).
+        [{id, text, metadata, score}, ...] sorted by relevance desc. The id can be
+        passed to memory_update / memory_forget. Scores are clamped to ``[0, 1]``.
     """
     top_k = max(1, min(50, int(top_k)))
     col = _get_col()
@@ -136,18 +146,26 @@ def memory_search(
     }
     if where:
         kwargs["where"] = where
+    sql_since = BACKEND == "sqlite"
+    if sql_since:
+        # Query text drives exact-token boosting; `since` is filtered in SQL, so a
+        # narrow window cannot be starved by older chunks that rank higher.
+        kwargs["query_texts"] = [query]
+        if since_dt:
+            kwargs["since"] = format_timestamp(since_dt)
     res = col.query(**kwargs)
     docs = (res.get("documents") or [[]])[0]
+    ids = (res.get("ids") or [[]])[0] or [None] * len(docs)
     metas = (res.get("metadatas") or [[]])[0]
     dists = (res.get("distances") or [[]])[0]
 
     seen_hashes: set[str] = set()
     out: list[dict] = []
-    for doc, meta, dist in zip(docs, metas, dists, strict=False):
+    for cid, doc, meta, dist in zip(ids, docs, metas, dists, strict=False):
         if not doc:
             continue
-        # since filter: compare parsed UTC datetimes (ISO string formats differ).
-        if since_dt:
+        # since filter (chroma backend): compare parsed UTC datetimes.
+        if since_dt and not sql_since:
             raw_ts = (meta or {}).get("timestamp")
             if not raw_ts:
                 continue
@@ -169,7 +187,7 @@ def memory_search(
             continue
         seen_hashes.add(h)
         score = _distance_to_score(dist)
-        out.append({"text": doc, "metadata": meta or {}, "score": round(score, 4)})
+        out.append({"id": cid, "text": doc, "metadata": meta or {}, "score": round(score, 4)})
         if len(out) >= top_k:
             break
     return out
@@ -209,6 +227,123 @@ def memory_add(text: str, metadata: dict | None = None) -> str:
     return cid
 
 
+@mcp.tool()
+def memory_update(
+    id: str,
+    text: str | None = None,
+    metadata: dict | None = None,
+    replace_metadata: bool = False,
+) -> dict:
+    """Update an existing memory chunk in place; the id is kept.
+
+    Keeping the id means references to it stay valid. An unknown id raises, so a
+    typo never silently turns into a new chunk.
+
+    Args:
+        id: chunk id (memory_search returns it in "id")
+        text: new text; the embedding is recomputed when given
+        metadata: metadata fields to change (merged unless replace_metadata)
+        replace_metadata: replace metadata wholesale instead of merging
+
+    Returns:
+        {id, changed: [...], metadata: {...}}
+    """
+    if not id or not id.strip():
+        raise ValueError("empty id")
+    if text is None and metadata is None:
+        raise ValueError("nothing to update: pass text and/or metadata")
+    if text is not None and not text.strip():
+        raise ValueError("empty text: use memory_forget to remove a chunk")
+
+    col = _get_col()
+    got = col.get(ids=[id], include=["documents", "metadatas"])
+    if not (got.get("ids") or []):
+        raise ValueError(f"unknown id: {id!r}")
+
+    old_meta = dict((got.get("metadatas") or [{}])[0] or {})
+    if replace_metadata:
+        meta = dict(metadata or {})
+        # agent and source are the filter axes; without them a chunk drops out
+        # of agent_filter / source_filter searches.
+        meta.setdefault("agent", old_meta.get("agent", "manual"))
+        meta.setdefault("source", old_meta.get("source", "memory_add"))
+        meta.setdefault("timestamp", old_meta.get("timestamp") or format_timestamp())
+    else:
+        meta = old_meta
+        meta.update(metadata or {})
+    meta["updated_at"] = format_timestamp()
+
+    kwargs: dict[str, Any] = {"ids": [id], "metadatas": [meta]}
+    changed = ["metadata"] if metadata is not None or replace_metadata else []
+    if text is not None:
+        kwargs["documents"] = [text]
+        kwargs["embeddings"] = [_get_embedder().embed_document_one(text)]
+        changed.append("text")
+    col.update(**kwargs)
+    LOG.info("memory_update id=%s changed=%s", id, ",".join(changed))
+    return {"id": id, "changed": changed, "metadata": meta}
+
+
+@mcp.tool()
+def memory_forget(
+    ids: list[str] | None = None,
+    agent_filter: str | None = None,
+    source_filter: str | None = None,
+    dry_run: bool = True,
+    expect_count: int | None = None,
+) -> dict:
+    """Delete memory chunks by explicit ids or by agent/source filter.
+
+    Deletion is irreversible, so there are two safety catches: dry_run is on by
+    default, and deleting by filter requires expect_count equal to the number
+    of matches, so an over-broad filter cannot wipe the collection by mistake.
+    A call with no ids and no filters is refused.
+
+    Args:
+        ids: specific chunks (memory_search returns ids)
+        agent_filter: everything from this agent
+        source_filter: everything from this source
+        dry_run: True (default) only reports what would be deleted
+        expect_count: required for filter deletes with dry_run=False
+
+    Returns:
+        {matched, deleted, dry_run, sample: [...], missing: [...]}
+    """
+    if not ids and not agent_filter and not source_filter:
+        raise ValueError("refusing to delete everything: pass ids, agent_filter or source_filter")
+
+    col = _get_col()
+    missing: list[str] = []
+    if ids:
+        got = col.get(ids=list(ids), include=["metadatas"])
+        found = list(got.get("ids") or [])
+        missing = [i for i in ids if i not in set(found)]
+        targets = found
+    else:
+        got = col.get(where=_build_where(agent_filter, source_filter), include=["metadatas"])
+        targets = list(got.get("ids") or [])
+
+    matched = len(targets)
+    result: dict[str, Any] = {"matched": matched, "deleted": 0, "dry_run": dry_run,
+                              "sample": targets[:10]}
+    if missing:
+        result["missing"] = missing
+    if dry_run:
+        result["hint"] = "dry run: nothing deleted. Call again with dry_run=False" + (
+            f" and expect_count={matched}" if not ids else "")
+        return result
+    if not ids and expect_count != matched:
+        raise ValueError(
+            f"expect_count mismatch: filter matches {matched}, expect_count={expect_count}. "
+            "Re-run with dry_run=True first.")
+    if matched:
+        col.delete(ids=targets)
+        result["deleted"] = matched
+        LOG.warning("memory_forget deleted=%d agent=%s source=%s",
+                    matched, agent_filter, source_filter)
+    return result
+
+
 _STATS_PAGE = 500
 
 
@@ -218,7 +353,8 @@ def memory_stats() -> dict:
     col = _get_col()
     total = col.count()
     if total == 0:
-        return {"total": 0, "by_agent": {}, "by_source": {}, "collection": col.name}
+        return {"total": 0, "by_agent": {}, "by_source": {}, "collection": col.name,
+                "backend": BACKEND}
 
     # Page through metadatas to keep peak memory bounded on large collections.
     by_agent: dict[str, int] = {}
@@ -249,6 +385,7 @@ def memory_stats() -> dict:
         "by_agent": by_agent,
         "by_source": by_source,
         "collection": col.name,
+        "backend": BACKEND,
     }
 
 

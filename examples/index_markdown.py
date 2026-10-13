@@ -58,12 +58,13 @@ def _setup_logging(verbose: bool = False) -> None:
 class MdFile:
     path: Path
     agent: str
+    kind: str = "note"
 
 
-def _discover(root: Path, agent: str) -> list[MdFile]:
+def _discover(root: Path, agent: str, kind: str = "note") -> list[MdFile]:
     if not root.exists():
         return []
-    return [MdFile(path=p, agent=agent) for p in sorted(root.rglob("*.md"))]
+    return [MdFile(path=p, agent=agent, kind=kind) for p in sorted(root.rglob("*.md"))]
 
 
 def _split_by_h2(text: str) -> list[tuple[str, str]]:
@@ -136,6 +137,7 @@ def _chunks_for(md: MdFile) -> list[tuple[str, dict]]:
     base_meta = {
         "agent": md.agent,
         "source": "markdown",
+        "kind": md.kind,  # ranking weight on the SQLite backend: note / doc / transcript
         "file": md.path.name,
         "path": path_key,
         "mtime": int(mtime),
@@ -212,12 +214,13 @@ def run(
     incremental: bool = False,
     dry_run: bool = False,
     batch: int = 32,
+    kind: str = "note",
 ) -> dict:
     client = get_client()
     collection = get_collection(client, name=collection_name)
     embedder = Embedder(batch_size=batch)
 
-    files = _discover(root, agent)
+    files = _discover(root, agent, kind)
     logging.info("discovered %d markdown files under %s", len(files), root)
 
     existing: dict[str, int] = {}
@@ -273,6 +276,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("path", help="directory to index (walked recursively for *.md)")
     ap.add_argument("--agent", default="notes", help="agent label stored in metadata.agent")
+    ap.add_argument("--kind", default="note", choices=["note", "doc", "transcript"],
+                    help="metadata.kind: distilled notes rank above docs and transcripts")
     ap.add_argument("--collection", default=DEFAULT_COLLECTION)
     ap.add_argument("--incremental", action="store_true", help="skip files unchanged by mtime")
     ap.add_argument("--dry-run", action="store_true")
@@ -288,6 +293,7 @@ def main() -> int:
         incremental=args.incremental,
         dry_run=args.dry_run,
         batch=args.batch,
+        kind=args.kind,
     )
     print(json.dumps(stats, indent=2, ensure_ascii=False))
     return 0
