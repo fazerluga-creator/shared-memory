@@ -16,9 +16,9 @@ Idempotency:
     mtime is unchanged are skipped.
 
 Usage:
-    python examples/index_markdown.py ./notes                 # full re-index
-    python examples/index_markdown.py ./notes --agent kb --incremental
-    python examples/index_markdown.py ./notes --dry-run
+    shared-memory-index ./notes                 # full re-index
+    shared-memory-index ./notes --agent kb --incremental
+    shared-memory-index ./notes --dry-run
 """
 from __future__ import annotations
 
@@ -31,11 +31,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-
-from lib.embedder import Embedder  # noqa: E402
-from lib.store import (  # noqa: E402
+from .embedder import Embedder
+from .store import (
     DEFAULT_COLLECTION,
     add_chunks,
     format_timestamp,

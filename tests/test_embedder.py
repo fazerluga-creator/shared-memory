@@ -1,10 +1,10 @@
-"""Tests for lib/embedder.py that don't require downloading a model."""
+"""Tests for shared_memory/embedder.py that don't require downloading a model."""
 from __future__ import annotations
 
 import pytest
 from conftest import ROOT  # noqa: F401  (ensures repo root on sys.path)
 
-from lib.embedder import (
+from shared_memory.embedder import (
     Embedder,
     EmbeddingConfigError,
     _l2_normalize,

@@ -21,8 +21,17 @@ dependencies = [
 chroma = ["chromadb>=0.5"]
 dev = ["pytest", "ruff", "chromadb>=0.5"]
 
+[project.scripts]
+shared-memory-mcp = "shared_memory.server:main"
+shared-memory-index = "shared_memory.index_markdown:main"
+shared-memory-migrate = "shared_memory.migrate:main"
+
+[project.urls]
+Homepage = "https://github.com/fazerluga-creator/shared-memory"
+Changelog = "https://github.com/fazerluga-creator/shared-memory/blob/main/CHANGELOG.md"
+
 [tool.setuptools.packages.find]
-include = ["lib*"]
+include = ["shared_memory*"]
 
 [tool.ruff]
 line-length = 100

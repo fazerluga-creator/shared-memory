@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from conftest import load_module
 
-server = load_module("mcp-server/server.py", "shared_memory_server")
+server = load_module("shared_memory/server.py", "shared_memory_server")
 
 
 def test_normalize_since_passes_iso_through():

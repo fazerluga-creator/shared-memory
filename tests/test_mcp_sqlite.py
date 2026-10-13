@@ -4,9 +4,9 @@ from __future__ import annotations
 import pytest
 from conftest import load_module
 
-from lib.store_sqlite import SqliteCollection, Store
+from shared_memory.store_sqlite import SqliteCollection, Store
 
-server = load_module("mcp-server/server.py", "shared_memory_server_sqlite")
+server = load_module("shared_memory/server.py", "shared_memory_server_sqlite")
 
 
 class Emb:

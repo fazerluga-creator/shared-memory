@@ -1,10 +1,10 @@
-"""Tests for lib/store.py helpers using fake collections/embedders."""
+"""Tests for shared_memory/store.py helpers using fake collections/embedders."""
 from __future__ import annotations
 
 import pytest
 from conftest import ROOT  # noqa: F401
 
-from lib.store import add_chunks, existing_session_ids, format_timestamp, parse_timestamp
+from shared_memory.store import add_chunks, existing_session_ids, format_timestamp, parse_timestamp
 
 
 class FakeEmbedder:
