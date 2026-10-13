@@ -1,6 +1,6 @@
 """shared-memory: a portable semantic memory layer for LLM agents."""
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from .embedder import Embedder, EmbeddingConfigError
 from .store import (

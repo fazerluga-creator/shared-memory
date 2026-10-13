@@ -53,16 +53,15 @@ shared-memory is the **second layer**: an unbounded store you search on demand.
 
 ```
 shared-memory/
-├── lib/
-│   ├── embedder.py      # embeddings: local fastembed | OpenAI-compatible | Voyage AI
-│   ├── store.py         # backend selection, shared helpers
-│   └── store_sqlite.py  # SQLite backend: storage, hybrid ranking, Chroma-style API
-├── mcp-server/
-│   └── server.py        # FastMCP server: the five memory_* tools
-├── examples/
-│   ├── index_markdown.py          # generic adapter: index a folder of *.md
-│   └── migrate_chroma_to_sqlite.py  # move a 0.1.x Chroma store to SQLite
-├── embedding.env.example   # copy to embedding.env to customize (optional)
+├── shared_memory/
+│   ├── server.py         # FastMCP server, the five memory_* tools  → shared-memory-mcp
+│   ├── index_markdown.py # generic adapter: index a folder of *.md  → shared-memory-index
+│   ├── migrate.py        # copy a Chroma store into SQLite          → shared-memory-migrate
+│   ├── embedder.py       # embeddings: local fastembed | OpenAI-compatible | Voyage AI
+│   ├── store.py          # backend selection, shared helpers
+│   └── store_sqlite.py   # SQLite backend: storage, hybrid ranking, Chroma-style API
+├── mcp-server/server.py  # compatibility shim for 0.1/0.2 configs (removed in 1.0)
+├── embedding.env.example # copy to embedding.env to customize (optional)
 └── requirements.txt
 ```
 
@@ -75,8 +74,23 @@ git clone https://github.com/fazerluga-creator/shared-memory.git
 cd shared-memory
 python -m venv .venv && source .venv/bin/activate
 pip install -e .              # SQLite backend (default)
-pip install -e ".[chroma]"    # also the ChromaDB backend / migration script
-# or: pip install -r requirements.txt
+pip install -e ".[chroma]"    # also the ChromaDB backend / migration
+```
+
+Or without cloning:
+
+```bash
+pip install "git+https://github.com/fazerluga-creator/shared-memory.git@v0.3.0"
+```
+
+This installs three commands: `shared-memory-mcp` (the server),
+`shared-memory-index` (markdown indexer) and `shared-memory-migrate`.
+
+**Where data lives.** From a clone (`pip install -e .`) the config and data stay
+in the repo folder: `embedding.env`, `memory.sqlite`. From a regular install
+they live in `~/.local/share/shared-memory/` (`$XDG_DATA_HOME/shared-memory`).
+`SHARED_MEMORY_HOME` moves both; `SHARED_MEMORY_ENV` / `SHARED_MEMORY_DB` set
+single files.
 ```
 
 Optionally copy the config and tweak it (defaults are fine to start):
@@ -94,17 +108,18 @@ Index some markdown and search it:
 
 ```bash
 # 1. ingest a folder of notes
-python examples/index_markdown.py ./notes --agent notes
+shared-memory-index ./notes --agent notes
 
 # 2. run the MCP server (stdio transport)
-python mcp-server/server.py
+shared-memory-mcp
+# or over HTTP on 127.0.0.1:8000 (read the Security section first)
+shared-memory-mcp --transport http
 ```
 
 Or use the library directly:
 
 ```python
-from lib.embedder import Embedder
-from lib.store import get_client, get_collection
+from shared_memory import Embedder, get_client, get_collection
 
 col = get_collection(get_client())
 emb = Embedder()
@@ -163,8 +178,7 @@ Add the server to your client config (paths are examples):
 {
   "mcpServers": {
     "shared-memory": {
-      "command": "/path/to/shared-memory/.venv/bin/python",
-      "args": ["/path/to/shared-memory/mcp-server/server.py"]
+      "command": "/path/to/shared-memory/.venv/bin/shared-memory-mcp"
     }
   }
 }
@@ -205,7 +219,7 @@ endpoint, set `EMBEDDING_PROVIDER=openai_compatible` and fill in
 
 Vectors are tagged with the model that produced them and search ignores vectors
 of any other model, so changing the provider or model means re-indexing
-(`examples/migrate_chroma_to_sqlite.py --reembed` does this for a Chroma store).
+(`shared-memory-migrate --reembed` does this for a Chroma store).
 
 ### Upgrading from 0.1.x (Chroma)
 
@@ -215,7 +229,7 @@ To move to SQLite:
 
 ```bash
 pip install -e ".[chroma]"
-python examples/migrate_chroma_to_sqlite.py   # reuses stored vectors, no API calls
+shared-memory-migrate   # reuses stored vectors, no API calls
 # check memory_stats / a few searches, then set SHARED_MEMORY_BACKEND=sqlite
 ```
 
@@ -240,9 +254,43 @@ memory (right file among the top 3 results):
 
 The numbers come from one corpus; treat them as a direction, not a guarantee.
 
+### Upgrading from 0.2.x
+
+The `lib` package is now `shared_memory`: change `from lib.store import ...` to
+`from shared_memory.store import ...` (or `from shared_memory import ...`).
+Client configs that run `mcp-server/server.py` keep working through a shim;
+switch them to the `shared-memory-mcp` command when convenient. Data files in
+a clone stay where they were.
+
+## Agents without access to the server: a file bus
+
+The MCP server is meant to stay on a private machine (see Security). Agents
+that cannot reach it, such as a chat assistant on a phone or a hosted agent
+with only a Google Drive or Dropbox connector, can still share work through a
+plain shared folder used as a message bus. One setup that works in practice:
+
+```
+Agent Bus/
+├── 00 Welcome          # what this is, which files to read first
+├── 01 Rules            # task and answer formats, what never goes here (secrets, personal data)
+├── 01_Inbox            # one file per task: task_id, from, to, priority, goal, expected result
+├── 02_Outbox           # one file per answer: task_id, agent, status done|blocked|needs_review
+├── 03_Shared Memory    # confirmed facts and decisions only, one file per decision
+└── 05_Logs             # traces, daily snapshots
+```
+
+Rules that keep it sane: every task and answer carries a `task_id`; silence
+from another agent is never treated as agreement; a record is a proposal, not
+permission to act on anything irreversible; secrets stay on the server and the
+bus carries only references. An agent that does have server access (for
+example Claude Code on the same machine) bridges the two: it reads the inbox,
+does the work with `memory_search` / `memory_add`, and writes confirmed facts
+back as files. shared-memory does not ship a bus; the folder layout above is a
+convention, not code.
+
 ## Writing your own indexer
 
-`examples/index_markdown.py` is the template. An adapter needs to:
+`shared_memory/index_markdown.py` is the template. An adapter needs to:
 
 1. discover source items,
 2. turn each into `(text, metadata)` chunks — always set `agent` and `source`,
