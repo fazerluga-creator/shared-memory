@@ -1,9 +1,9 @@
-"""Tests for the markdown chunking logic in examples/index_markdown.py."""
+"""Tests for the markdown chunking logic in shared_memory/index_markdown.py."""
 from __future__ import annotations
 
 from conftest import load_module
 
-idx = load_module("examples/index_markdown.py", "index_markdown")
+idx = load_module("shared_memory/index_markdown.py", "index_markdown")
 
 
 def test_split_by_h2_basic():

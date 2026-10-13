@@ -9,21 +9,16 @@ embedding.env. Pass --reembed when you are switching models at the same time
 The Chroma directory is only read, never changed. After checking the result,
 set SHARED_MEMORY_BACKEND=sqlite (or remove chroma_data) and restart the server.
 
-    python examples/migrate_chroma_to_sqlite.py            # reuse vectors
-    python examples/migrate_chroma_to_sqlite.py --reembed  # recompute with current embedder
+    shared-memory-migrate           # reuse vectors
+    shared-memory-migrate--reembed  # recompute with current embedder
 """
 from __future__ import annotations
 
 import argparse
-import sys
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-
-from lib.embedder import ENV_PATH, Embedder, _load_env, resolve_model  # noqa: E402
-from lib.store import DEFAULT_COLLECTION, DEFAULT_DATA_DIR, DEFAULT_SQLITE_PATH  # noqa: E402
-from lib.store_sqlite import Store  # noqa: E402
+from .embedder import ENV_PATH, Embedder, _load_env, resolve_model
+from .store import DEFAULT_COLLECTION, DEFAULT_DATA_DIR, DEFAULT_SQLITE_PATH
+from .store_sqlite import Store
 
 PAGE = 1000
 

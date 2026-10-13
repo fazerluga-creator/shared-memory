@@ -1,7 +1,7 @@
 """Voyage provider: query/document input types and batching (no network)."""
 from __future__ import annotations
 
-from lib.embedder import Embedder, resolve_model
+from shared_memory.embedder import Embedder, resolve_model
 
 
 class FakeSession:

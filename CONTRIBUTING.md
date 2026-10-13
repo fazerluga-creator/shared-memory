@@ -10,7 +10,7 @@ git clone https://github.com/fazerluga-creator/shared-memory.git
 cd shared-memory
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-# or: pip install -r requirements.txt && pip install pytest ruff
+# or: pip install -r requirements.txt && pip install pytest ruff chromadb
 ```
 
 ## Running checks
@@ -27,13 +27,13 @@ Both run in CI on every PR; please make sure they pass locally first.
 - Check the [open issues](https://github.com/fazerluga-creator/shared-memory/issues) —
   ones labeled `good first issue` are self-contained starters.
 - New **indexer adapters** (chat logs, issue trackers, docs) are especially
-  welcome: copy `examples/index_markdown.py` as a template, keep the id scheme
+  welcome: copy `shared_memory/index_markdown.py` as a template, keep the id scheme
   deterministic, and always set `agent`, `source`, and an ISO `timestamp` in
   chunk metadata.
 
 ## Guidelines
 
-- Keep the core small: `lib/` and `mcp-server/` should stay free of
+- Keep the core small: `shared_memory/` should stay free of
   source-specific logic — that belongs in adapters.
 - The default configuration must stay **local-only** (no network calls with an
   empty config).

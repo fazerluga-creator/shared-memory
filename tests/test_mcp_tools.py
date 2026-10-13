@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from conftest import load_module
 
-server = load_module("mcp-server/server.py", "shared_memory_server_integration")
+server = load_module("shared_memory/server.py", "shared_memory_server_integration")
 # The fakes below mimic a Chroma collection; SQLite-specific behaviour (since in
 # SQL, query_texts) is covered by tests/test_mcp_sqlite.py.
 server.BACKEND = "chroma"

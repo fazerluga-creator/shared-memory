@@ -5,6 +5,37 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/) (while on 0.x, a minor version may
 contain breaking changes; they are listed under **Changed**).
 
+## [0.3.0] - 2026-10-13
+
+### Added
+- Console commands: `shared-memory-mcp` (server; `--transport http`,
+  `--host`, `--port`), `shared-memory-index` (markdown indexer) and
+  `shared-memory-migrate` (Chroma → SQLite). No more full paths in client configs.
+- Install straight from GitHub: `pip install "git+https://github.com/fazerluga-creator/shared-memory.git@v0.3.0"`.
+- README: "Agents without access to the server: a file bus" — the shared-folder
+  convention for agents that cannot reach the MCP server.
+- `SHARED_MEMORY_HOME` to move config and data together.
+
+### Changed
+- **The package is renamed from `lib` to `shared_memory`** (`lib` was too
+  generic and could collide with other installed packages). Imports change from
+  `lib.store` to `shared_memory.store`; see "Upgrading from 0.2.x" in the README.
+- The server, the markdown indexer and the migration script moved into the
+  package (`shared_memory/server.py`, `index_markdown.py`, `migrate.py`); the
+  `examples/` folder is gone.
+- Config and data of a regular (non-editable) install live in
+  `~/.local/share/shared-memory/` instead of next to the installed code. A
+  source checkout keeps using the repo folder, as before.
+
+### Security
+- `shared-memory-mcp --transport http` refuses to bind a non-loopback address
+  unless `--allow-unauthenticated-remote` is passed, and then logs a warning:
+  the server has no authentication.
+
+### Deprecated
+- `mcp-server/server.py` is a thin shim kept for 0.1/0.2 client configs; it
+  will be removed in 1.0.
+
 ## [0.2.0] - 2026-10-13
 
 ### Added
@@ -56,5 +87,6 @@ First public release.
 - Generic markdown indexer (`examples/index_markdown.py`).
 - Hardening of search, indexing and timestamps; tests and CI.
 
+[0.3.0]: https://github.com/fazerluga-creator/shared-memory/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/fazerluga-creator/shared-memory/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/fazerluga-creator/shared-memory/releases/tag/v0.1.0

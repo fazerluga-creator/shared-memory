@@ -3,14 +3,14 @@
 Two backends behind one Chroma-style collection API:
 
 * ``sqlite`` (default since 0.2.0) - one SQLite file with chunks, an FTS5 index
-  and vectors; hybrid ranking, see ``lib/store_sqlite.py``. No extra service.
+  and vectors; hybrid ranking, see ``shared_memory/store_sqlite.py``. No extra service.
 * ``chroma`` - the original persistent ChromaDB directory. Needs the optional
   ``chromadb`` dependency (``pip install "shared-memory[chroma]"``).
 
 Choose with ``SHARED_MEMORY_BACKEND`` (environment or ``embedding.env``). When it
 is unset and an existing ``chroma_data`` directory is found without a SQLite
 file next to it, the chroma backend is kept so an upgrade never hides existing
-memories; migrate with ``examples/migrate_chroma_to_sqlite.py``.
+memories; migrate with ``shared-memory-migrate``.
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ._paths import home
 from .embedder import ENV_PATH, Embedder, _load_env
 
 LOG = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ def format_timestamp(dt: datetime | None = None) -> str:
 
 
 _ENV = _load_env(ENV_PATH)
-_ROOT = Path(__file__).resolve().parent.parent
+_ROOT = home()
 
 
 def _setting(key: str, default: str) -> str:
@@ -70,7 +71,7 @@ def _detect_backend() -> str:
         LOG.warning(
             "found existing Chroma data in %s and no %s: staying on the chroma backend. "
             "Set SHARED_MEMORY_BACKEND=chroma to silence this, or migrate with "
-            "examples/migrate_chroma_to_sqlite.py",
+            "shared-memory-migrate",
             DEFAULT_DATA_DIR, DEFAULT_SQLITE_PATH)
         return "chroma"
     return "sqlite"

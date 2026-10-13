@@ -7,7 +7,8 @@ Optional providers send text to a remote API: ``openai_compatible`` (any
 this order:
 
   1. ``$SHARED_MEMORY_ENV``
-  2. ``embedding.env`` at the repository root (optional)
+  2. ``embedding.env`` in the shared-memory home (the repo root for a source
+     checkout, ``~/.local/share/shared-memory`` for an install; see ``_paths.py``)
 
 If no env file is found, sensible local defaults are used. See
 ``embedding.env.example`` for the full list of keys.
@@ -28,10 +29,12 @@ LOG = logging.getLogger(__name__)
 
 
 def _default_env_path() -> Path:
+    from ._paths import home
+
     override = os.environ.get("SHARED_MEMORY_ENV")
     if override:
         return Path(override)
-    return Path(__file__).resolve().parent.parent / "embedding.env"
+    return home() / "embedding.env"
 
 
 ENV_PATH = _default_env_path()

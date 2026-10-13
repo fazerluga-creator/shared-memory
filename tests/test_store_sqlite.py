@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from lib.store_sqlite import SqliteCollection, Store, exact_tokens, where_sql
+from shared_memory.store_sqlite import SqliteCollection, Store, exact_tokens, where_sql
 
 
 def vec(*xs):
