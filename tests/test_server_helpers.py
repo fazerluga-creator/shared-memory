@@ -53,3 +53,23 @@ def test_fetch_n_larger_when_since_set():
     assert server._fetch_n_for_search(5, since=False) == 15
     assert server._fetch_n_for_search(5, since=True) == 50
     assert server._fetch_n_for_search(50, since=True) == 200
+
+
+def test_http_bind_refuses_non_loopback_without_flag():
+    import pytest
+
+    server.check_bind_host("127.0.0.1", False)
+    server.check_bind_host("::1", False)
+    with pytest.raises(SystemExit):
+        server.check_bind_host("0.0.0.0", False)
+    server.check_bind_host("0.0.0.0", True)  # explicit opt-in only logs a warning
+
+
+def test_main_refuses_public_bind_before_starting(monkeypatch):
+    import pytest
+
+    started = []
+    monkeypatch.setattr(server.mcp, "run", lambda *a, **k: started.append(1))
+    with pytest.raises(SystemExit):
+        server.main(["--transport", "http", "--host", "0.0.0.0"])
+    assert not started

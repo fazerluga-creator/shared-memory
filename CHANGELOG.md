@@ -27,6 +27,11 @@ contain breaking changes; they are listed under **Changed**).
   `~/.local/share/shared-memory/` instead of next to the installed code. A
   source checkout keeps using the repo folder, as before.
 
+### Security
+- `shared-memory-mcp --transport http` refuses to bind a non-loopback address
+  unless `--allow-unauthenticated-remote` is passed, and then logs a warning:
+  the server has no authentication.
+
 ### Deprecated
 - `mcp-server/server.py` is a thin shim kept for 0.1/0.2 client configs; it
   will be removed in 1.0.

@@ -189,7 +189,9 @@ Add the server to your client config (paths are examples):
 **The server has no authentication.** Anyone who can reach it can read every
 memory, add to it, rewrite it and delete it. Run it over stdio, or bind the
 HTTP transport to `127.0.0.1` (FastMCP's default), and never expose it to the
-internet or to a network you do not fully control. If several machines need it,
+internet or to a network you do not fully control. `shared-memory-mcp
+--transport http` refuses a non-loopback `--host` unless you also pass
+`--allow-unauthenticated-remote`. If several machines need it,
 put it behind a VPN or an authenticating reverse proxy.
 
 Memories tend to collect secrets that were pasted into chats. Treat the

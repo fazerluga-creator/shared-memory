@@ -385,7 +385,28 @@ def memory_stats() -> dict:
     }
 
 
-def main() -> None:
+_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+
+
+def check_bind_host(host: str, allow_remote: bool) -> None:
+    """Refuse a non-loopback HTTP bind unless explicitly allowed.
+
+    The server has no authentication: whoever reaches the port can read, rewrite
+    and delete every memory. Exposing it must be a deliberate choice.
+    """
+    if host in _LOOPBACK:
+        return
+    if not allow_remote:
+        raise SystemExit(
+            f"refusing to listen on {host!r}: shared-memory has no authentication. "
+            "Use 127.0.0.1, or pass --allow-unauthenticated-remote if a VPN or an "
+            "authenticating proxy protects this port."
+        )
+    LOG.warning("listening on %s WITHOUT authentication: anyone who can reach this "
+                "port can read, change and delete every memory", host)
+
+
+def main(argv: list[str] | None = None) -> None:
     """Console entry point ``shared-memory-mcp``: stdio by default.
 
     ``shared-memory-mcp --transport http`` serves streamable HTTP on
@@ -397,7 +418,12 @@ def main() -> None:
     ap.add_argument("--transport", choices=["stdio", "http"], default="stdio")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
-    a = ap.parse_args()
+    ap.add_argument("--allow-unauthenticated-remote", action="store_true",
+                    help="bind HTTP to a non-loopback address even though the server has "
+                         "no authentication (put it behind a VPN or an authenticating proxy)")
+    a = ap.parse_args(argv)
+    if a.transport == "http":
+        check_bind_host(a.host, a.allow_unauthenticated_remote)
     if a.transport == "stdio":
         mcp.run()
     else:
