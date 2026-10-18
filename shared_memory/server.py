@@ -50,7 +50,7 @@ logging.basicConfig(
     stream=sys.stderr,
 )
 
-mcp = FastMCP("shared-memory")
+mcp = FastMCP("shared-memory", version="0.3.0")
 
 # Lazy singletons
 _embedder: Embedder | None = None
