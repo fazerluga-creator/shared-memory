@@ -102,6 +102,19 @@ cp embedding.env.example embedding.env
 The first run downloads the local embedding model (a few hundred MB) once.
 With a remote provider (`voyage`, `openai_compatible`) nothing is downloaded.
 
+## Docker
+
+```bash
+docker build -t shared-memory .
+docker run -i --rm -v shared-memory-data:/data shared-memory
+```
+
+The container speaks MCP over stdio and needs no credentials: the SQLite store
+lives in `/data` and embeddings run locally (the model is downloaded on the first
+search or add). Mount `/data` to keep the memory between runs.
+
+[![fazerluga-creator/shared-memory MCP server](https://glama.ai/mcp/servers/fazerluga-creator/shared-memory/badges/score.svg)](https://glama.ai/mcp/servers/fazerluga-creator/shared-memory)
+
 ## Quick start
 
 Index some markdown and search it:
