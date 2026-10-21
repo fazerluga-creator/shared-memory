@@ -3,6 +3,9 @@
 [![CI](https://github.com/fazerluga-creator/shared-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/fazerluga-creator/shared-memory/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
+[![shared-memory MCP server](https://glama.ai/mcp/servers/fazerluga-creator/shared-memory/badges/score.svg)](https://glama.ai/mcp/servers/fazerluga-creator/shared-memory)
+
+Listed on Glama: https://glama.ai/mcp/servers/fazerluga-creator/shared-memory
 
 A portable, self-hosted **semantic memory layer for LLM agents**, exposed over
 the [Model Context Protocol](https://modelcontextprotocol.io) (MCP).
