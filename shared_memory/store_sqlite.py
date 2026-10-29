@@ -66,6 +66,34 @@ CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE OF doc ON chunks BEGIN
   INSERT INTO fts(rowid, doc) VALUES (new.rowid, new.doc); END;
 """
 
+# Separate from SCHEMA so applying or dropping links never rewrites `chunks`.
+LINK_TYPES = ("similar", "tag", "llm", "manual")
+
+MEMORY_LINKS_UP = """
+CREATE TABLE IF NOT EXISTS memory_links(
+  from_id TEXT NOT NULL,
+  to_id TEXT NOT NULL,
+  type TEXT NOT NULL CHECK(type IN ('similar', 'tag', 'llm', 'manual')),
+  score REAL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(from_id, to_id, type)
+);
+CREATE INDEX IF NOT EXISTS memory_links_from_id ON memory_links(from_id);
+CREATE INDEX IF NOT EXISTS memory_links_to_id ON memory_links(to_id);
+"""
+
+MEMORY_LINKS_DOWN = "DROP TABLE IF EXISTS memory_links;"
+
+
+def apply_memory_links(con: sqlite3.Connection) -> None:
+    """Create ``memory_links`` (idempotent). Does not change chunks, FTS or triggers."""
+    con.executescript(MEMORY_LINKS_UP)
+
+
+def revert_memory_links(con: sqlite3.Connection) -> None:
+    """Drop ``memory_links`` and its indexes. Chunk rows are left in place."""
+    con.executescript(MEMORY_LINKS_DOWN)
+
 _OPS = {"$eq": "=", "$ne": "!=", "$gt": ">", "$gte": ">=", "$lt": "<", "$lte": "<="}
 
 
@@ -148,6 +176,7 @@ class Store:
         # indexers and the server write from different processes
         self.con.execute("PRAGMA busy_timeout=30000")
         self.con.executescript(SCHEMA)
+        apply_memory_links(self.con)
         self._mat = None  # (rowids, matrix, weights); dropped on any write
         self._ver = None
 
@@ -176,10 +205,78 @@ class Store:
 
     def delete_ids(self, ids: Iterable[str]) -> int:
         gone = [(c,) for c in ids]
+        # Drop dangling edges. No FK: the chunks table itself stays unchanged.
+        self.con.executemany(
+            "DELETE FROM memory_links WHERE from_id=? OR to_id=?",
+            [(c, c) for (c,) in gone],
+        )
         self.con.executemany("DELETE FROM chunks WHERE id=?", gone)
         self.con.commit()
         self._mat = None
         return len(gone)
+
+    def add_links(self, rows: Iterable[tuple]) -> int:
+        """Insert links. ``(from_id, to_id, type, score=None, created_at=None)``.
+
+        Self-links are skipped. A repeated primary key refreshes ``score`` only.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        clean = []
+        for row in rows:
+            if len(row) < 3:
+                raise ValueError("link row needs from_id, to_id, type")
+            from_id, to_id, typ = row[0], row[1], row[2]
+            score = row[3] if len(row) > 3 else None
+            created_at = row[4] if len(row) > 4 and row[4] else now
+            if not from_id or not to_id or from_id == to_id:
+                continue
+            if typ not in LINK_TYPES:
+                raise ValueError(f"unsupported link type: {typ!r}")
+            clean.append((str(from_id), str(to_id), typ,
+                          None if score is None else float(score), str(created_at)))
+        if not clean:
+            return 0
+        self.con.executemany(
+            """INSERT INTO memory_links(from_id, to_id, type, score, created_at)
+               VALUES (?,?,?,?,?)
+               ON CONFLICT(from_id, to_id, type) DO UPDATE SET score=excluded.score""",
+            clean)
+        self.con.commit()
+        return len(clean)
+
+    def links_for(self, chunk_id: str, link_type: str | None = None, limit: int = 50) -> list[dict]:
+        """Links where ``chunk_id`` is either endpoint, newest first."""
+        if link_type is not None and link_type not in LINK_TYPES:
+            raise ValueError(f"unsupported link type: {link_type!r}")
+        limit = max(1, min(int(limit), 200))
+        sql = """SELECT from_id, to_id, type, score, created_at FROM memory_links
+                 WHERE (from_id=? OR to_id=?)"""
+        args: list = [chunk_id, chunk_id]
+        if link_type:
+            sql += " AND type=?"
+            args.append(link_type)
+        sql += " ORDER BY created_at DESC, from_id, to_id LIMIT ?"
+        args.append(limit)
+        out = []
+        for from_id, to_id, typ, score, created_at in self.con.execute(sql, args):
+            out.append({
+                "from_id": from_id,
+                "to_id": to_id,
+                "type": typ,
+                "score": None if score is None else float(score),
+                "created_at": created_at,
+            })
+        return out
+
+    def docs_containing(self, needle: str, exclude_id: str, limit: int = 200) -> list[tuple[str, str]]:
+        """Newest chunks whose text contains ``needle`` inside a ``[[...]]`` span."""
+        return self.con.execute(
+            """SELECT id, doc FROM chunks
+               WHERE id != ? AND instr(doc, '[[') > 0 AND instr(doc, ?) > 0
+               ORDER BY rowid DESC
+               LIMIT ?""",
+            (exclude_id, needle, int(limit)),
+        ).fetchall()
 
     def count(self) -> int:
         return self.con.execute("SELECT count(*) FROM chunks").fetchone()[0]

@@ -5,6 +5,20 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/) (while on 0.x, a minor version may
 contain breaking changes; they are listed under **Changed**).
 
+## [Unreleased]
+
+### Added
+- Reversible `memory_links` table (`similar`, `tag`, `llm`, `manual`) with
+  indexes on `from_id` and `to_id`. The `chunks` schema is not changed;
+  `revert_memory_links` drops only the link table.
+- `memory_add` records similar links (hybrid search, top 5, score ≥
+  `SHARED_MEMORY_LINK_THRESHOLD`, default 0.75) and `[[topic]]` tag links
+  (at most 20). A linking error is logged and does not fail the insert.
+- MCP tools `memory_links` and `memory_graph` (`{nodes, edges}`, hard cap
+  200 nodes / 500 edges).
+- `scripts/link_backfill.py`: dry-run by default, optional OmniRoute
+  confirmation (`type=llm`). No crontab entry is installed.
+
 ## [0.3.0] - 2026-10-13
 
 ### Added

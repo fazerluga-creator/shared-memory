@@ -5,13 +5,17 @@ Tools:
   - memory_search(query, top_k=5, agent_filter=None, source_filter=None, since=None)
       Returns list of {id, text, metadata, score}.
   - memory_add(text, metadata)
-      Returns id of the added chunk.
+      Returns id of the added chunk. On SQLite, also records similar and [[tag]] links.
   - memory_update(id, text=None, metadata=None, replace_metadata=False)
       Edits a chunk in place; the id is kept.
   - memory_forget(ids=None, agent_filter=None, source_filter=None, dry_run=True, expect_count=None)
       Deletes chunks; dry run by default.
   - memory_stats()
       Returns {total, by_agent, by_source, collection, backend}.
+  - memory_links(id, type=None, limit=50)
+      Links touching one chunk.
+  - memory_graph(filter=None, limit=100)
+      ``{nodes, edges}`` with a hard size cap.
 
 Storage is a single SQLite file by default (shared_memory/store_sqlite.py) or a ChromaDB
 directory (SHARED_MEMORY_BACKEND=chroma); see shared_memory/store.py. Embeddings are
@@ -34,6 +38,7 @@ from typing import Any
 from fastmcp import FastMCP
 
 from .embedder import Embedder
+from .links import build_graph, link_new_chunk
 from .store import (
     BACKEND,
     DEFAULT_COLLECTION,
@@ -191,7 +196,13 @@ def memory_search(
 
 @mcp.tool()
 def memory_add(text: str, metadata: dict | None = None) -> str:
-    """Add an ad-hoc memory chunk. Returns the generated id."""
+    """Add an ad-hoc memory chunk. Returns the generated id.
+
+    On SQLite, the insert is followed by up to 5 ``similar`` links (hybrid
+    score ≥ ``SHARED_MEMORY_LINK_THRESHOLD``, default 0.75) and up to 20
+    ``[[topic]]`` tag links. A linking failure is logged and does not fail
+    the add.
+    """
     if not text or not text.strip():
         raise ValueError("empty text")
     meta = dict(metadata or {})
@@ -220,6 +231,11 @@ def memory_add(text: str, metadata: dict | None = None) -> str:
         documents=[text],
         metadatas=[meta],
     )
+    # Linking is best-effort: a search or SQL failure must not lose the insert.
+    try:
+        link_new_chunk(col, cid, text, emb)
+    except Exception:
+        LOG.exception("memory_add saved %s but linking failed", cid)
     return cid
 
 
@@ -383,6 +399,47 @@ def memory_stats() -> dict:
         "collection": col.name,
         "backend": BACKEND,
     }
+
+
+@mcp.tool()
+def memory_links(id: str, type: str | None = None, limit: int = 50) -> list[dict]:
+    """Links that touch one chunk, in either direction.
+
+    Args:
+        id: chunk id (``memory_search`` / ``memory_add`` return it)
+        type: optional ``similar``, ``tag``, ``llm`` or ``manual``
+        limit: max rows (default 50, hard cap 200)
+
+    Returns:
+        ``[{from_id, to_id, type, score, created_at}, ...]`` newest first.
+        ``score`` is null for tag links. Empty on the Chroma backend.
+    """
+    if not id or not str(id).strip():
+        raise ValueError("empty id")
+    store = getattr(_get_col(), "s", None)
+    if store is None:
+        return []
+    return store.links_for(id, type, limit)
+
+
+@mcp.tool()
+def memory_graph(filter: str | None = None, limit: int = 100) -> dict:
+    """Cross-link graph for the SQLite store.
+
+    Args:
+        filter: optional substring of a chunk id, its text, or ``metadata.agent``.
+            Direct neighbours are included while the node cap allows.
+        limit: max nodes (default 100, hard cap 200). Edges are capped at 500
+            and only connect nodes in the response.
+
+    Returns:
+        ``{"nodes": [{id, text, metadata}, ...], "edges": [{from_id, to_id, type, score}, ...]}``.
+        Empty when the backend is not SQLite.
+    """
+    store = getattr(_get_col(), "s", None)
+    if store is None:
+        return {"nodes": [], "edges": []}
+    return build_graph(store, filter, limit)
 
 
 _LOOPBACK = {"127.0.0.1", "::1", "localhost"}

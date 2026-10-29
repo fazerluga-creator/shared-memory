@@ -23,8 +23,8 @@ notes, and conversations by meaning instead of grepping files.
   nothing leaves the host unless you opt into a remote API (OpenAI-compatible or Voyage AI).
 - **One store, many agents.** Every chunk carries an `agent` and `source` tag,
   so searches can be global or scoped to a single agent.
-- **Five MCP tools.** `memory_search`, `memory_add`, `memory_update`,
-  `memory_forget`, `memory_stats`.
+- **Seven MCP tools.** `memory_search`, `memory_add`, `memory_update`,
+  `memory_forget`, `memory_stats`, `memory_links`, `memory_graph`.
 - **Bring your own content.** Ships with a generic markdown indexer; writing an
   adapter for chat logs, tickets, or docs is a short script.
 
@@ -57,7 +57,7 @@ shared-memory is the **second layer**: an unbounded store you search on demand.
 ```
 shared-memory/
 ├── shared_memory/
-│   ├── server.py         # FastMCP server, the five memory_* tools  → shared-memory-mcp
+│   ├── server.py         # FastMCP server, the memory_* tools       → shared-memory-mcp
 │   ├── index_markdown.py # generic adapter: index a folder of *.md  → shared-memory-index
 │   ├── migrate.py        # copy a Chroma store into SQLite          → shared-memory-migrate
 │   ├── embedder.py       # embeddings: local fastembed | OpenAI-compatible | Voyage AI
@@ -160,6 +160,8 @@ print(res["documents"])
 | `memory_update` | `(id, text=None, metadata=None, replace_metadata=False)` | `{id, changed, metadata}`; the id is kept, unknown ids raise |
 | `memory_forget` | `(ids=None, agent_filter=None, source_filter=None, dry_run=True, expect_count=None)` | `{matched, deleted, dry_run, sample}` |
 | `memory_stats` | `()` | `{total, by_agent, by_source, collection, backend}` |
+| `memory_links` | `(id, type=None, limit=50)` | `[{from_id, to_id, type, score, created_at}, ...]` either direction |
+| `memory_graph` | `(filter=None, limit=100)` | `{nodes, edges}`; at most 200 nodes and 500 edges |
 
 `memory_forget` is a dry run unless you pass `dry_run=False`; deleting by filter
 also requires `expect_count` equal to the number of matches, and a call with no
@@ -185,6 +187,24 @@ Filters:
 - `since` — ISO timestamp lower bound on `metadata.timestamp`. On the SQLite
   backend it is applied before ranking, so a narrow window on a large store
   still returns the matches inside it.
+
+On SQLite, `memory_add` also writes cross-links (failures are logged and do not
+fail the insert):
+
+- **similar** — hybrid-search neighbours, top 5, score ≥ `SHARED_MEMORY_LINK_THRESHOLD`
+  (default `0.75`), excluding the new chunk itself.
+- **tag** — other chunks that share a `[[topic]]` marker in the text, at most 20.
+
+`memory_links` lists those rows. `memory_graph` returns the same edges as
+`{nodes, edges}` for a UI or a prompt. `filter` is a substring of the chunk id,
+text, or `metadata.agent`; direct neighbours are included until the cap.
+Deleting a chunk removes its links. The `chunks` table itself is unchanged.
+
+`scripts/link_backfill.py` rebuilds similar links for chunks that were stored
+before this existed. It is a dry-run unless you pass `--apply`. `--llm` confirms
+each new pair through OmniRoute at `http://127.0.0.1:20128/v1/chat/completions`
+(API key from `OMNIROUTE_API_KEY` or a local file, never hardcoded) and stores
+`type=llm`. The script does not install cron.
 
 ### Connect to Claude Code / any MCP client
 
@@ -225,6 +245,7 @@ are overridable by environment variable:
 | `SHARED_MEMORY_ENV` | `./embedding.env` | location of the env file |
 | `SHARED_MEMORY_BACKEND` | `sqlite` | `sqlite` or `chroma` (see below) |
 | `SHARED_MEMORY_DB` | `./memory.sqlite` | SQLite database file |
+| `SHARED_MEMORY_LINK_THRESHOLD` | `0.75` | minimum hybrid score for a `similar` link |
 | `SHARED_MEMORY_DATA_DIR` | `./chroma_data` | ChromaDB persistence directory |
 | `EMBEDDING_PROVIDER` | `local` | `local` (fastembed), `openai_compatible` or `voyage` |
 | `EMBEDDING_MODEL` | MiniLM multilingual (`voyage-4` for voyage) | embedding model id |
